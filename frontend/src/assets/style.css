@@ -108,10 +108,10 @@ td.offline { color: red; }
   text-align: left;
 }
 
-.logs td.D { color: var(--log-debug); }
-.logs td.I { color: var(--log-info); }
-.logs td.W { color: var(--log-warning); }
-.logs td.E { color: var(--log-error); }
+.logs tr.D td { color: var(--log-debug); }
+.logs tr.I td { color: var(--log-info); }
+.logs tr.W td { color: var(--log-warning); }
+.logs tr.E td { color: var(--log-error); }
 
 .logs {
   height: 100%;

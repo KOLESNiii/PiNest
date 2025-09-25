@@ -48,12 +48,10 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(log, index) in logs" :key="index">
+            <tr v-for="(log, index) in logs" :key="index" :class="(log.level || 'I').toUpperCase()">
               <td>{{ log.timestamp || '-' }}</td>
               <td>{{ log.origin || 'Unknown' }}</td>
-              <td :class="['level-' + (log.level || 'I').toUpperCase()]">
-                {{ log.level || 'I' }}
-              </td>
+              <td>{{ log.level || 'I' }}</td>
               <td>{{ log.message || '-' }}</td>
             </tr>
           </tbody>
