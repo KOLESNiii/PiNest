@@ -37,6 +37,7 @@ class PiNode:
         self.name = name
         self.broker = broker
         self.heartbeat_interval = heartbeat_interval
+        self.running = False
 
         self.client = mqtt.Client(client_id=self.uid, protocol=mqtt.MQTTv311)
         self.client.on_connect = self.on_connect
@@ -81,14 +82,37 @@ class PiNode:
     def run(self):
         self.client.connect(self.broker, 1883, 60)
         self.client.loop_start()
+        self.running = True
 
         try:
-            while True:
+            while self.running:
                 self.publish_status()
                 self.publish_log("Heartbeat check", LogLevel.INFO)
                 time.sleep(self.heartbeat_interval)
         except KeyboardInterrupt:
             print(f"[{self.uid}] Shutting down simulated node...")
-            self.publish_log("Node shutting down", LogLevel.WARNING)
-            self.client.loop_stop()
-            self.client.disconnect()
+            self.kill()
+
+    def kill(self):
+        if not self.running:
+            return
+        
+        print(f"[{self.uid}] Shutting down node...")
+        self.publish_log("Node recieved shutdown command", LogLevel.INFO)
+        self.publish_log("Node shutting down", LogLevel.WARNING)
+
+        offline_status = {
+            "uid": self.uid,
+            "name": self.name,
+            "ip": self.get_ip(),
+            "cpu": 0,
+            "temp": 0,
+            "status": "offline",
+            "last_seen": time.strftime("%Y-%m-%dT%H:%M:%S")
+        }
+        self.client.publish(self.status_topic, json.dumps(offline_status))
+
+        self.running = False
+        self.client.loop_stop()
+        self.client.disconnect()
+        print(f"[{self.uid}] Disconnected from MQTT broker.")

@@ -1,27 +1,25 @@
 import multiprocessing
 import time
-from node import PiNode
+from simulated_node import NodeThread
 
-def run_node(uid, name):
-    node = PiNode(uid=uid, name=name)
-    node.run()
-
-if __name__ == "__main__":
-    processes = []
-    num_nodes = 3  # change to simulate more nodes
+def main():
+    num_nodes = 3  # how many simulated nodes
+    threads = []
 
     for i in range(num_nodes):
         uid = f"sim-node-{i+1:03d}"
-        name = f"Simulated Node {i+1}"
-        p = multiprocessing.Process(target=run_node, args=(uid, name))
-        p.start()
-        processes.append(p)
-        time.sleep(0.5)  # stagger startup slightly
+        name = f"Sim Node {i+1}"
+        t = NodeThread(uid, name)
+        t.start()
+        threads.append(t)
 
+    # Keep manager alive
     try:
-        for p in processes:
-            p.join()
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
-        print("Shutting down simulation...")
-        for p in processes:
-            p.terminate()
+        print("Simulation manager shutting down...")
+
+
+if __name__ == "__main__":
+    main()
