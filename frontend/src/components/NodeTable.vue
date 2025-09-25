@@ -22,7 +22,7 @@
         <td>{{ node.ip }}</td>
         <td>{{ node.cpu }}</td>
         <td>{{ node.temp }}</td>
-        <td>{{ node.status }}</td>
+        <td :class="node.status">{{ node.status }}</td>
         <td>{{ node.last_seen }}</td>
       </tr>
     </table>
