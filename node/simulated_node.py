@@ -1,15 +1,13 @@
 import threading
 import random
 import time
-from node import PiNode
+from .node import PiNode
 
 class NodeThread(threading.Thread):
-    def __init__(self, uid, name, broker="localhost"):
+    def __init__(self, broker="localhost", backend="http://localhost:8000"):
         super().__init__()
-        self.uid = uid
-        self.name = name
         self.broker = broker
-        self.node = PiNode(uid=self.uid, name=self.name, broker=self.broker)
+        self.node = PiNode(broker=broker, backend=backend)
         self.daemon = True  # ensures thread exits when main exits
 
     def run(self):
@@ -17,25 +15,25 @@ class NodeThread(threading.Thread):
             while True:
                 # Random uptime between 5–15s
                 uptime = random.randint(5, 15)
-                print(f"[{self.uid}] Starting node for {uptime}s")
+                print(f"[{self.node.uid}] Starting node for {uptime}s")
                 t = threading.Thread(target=self.node.run)
                 t.start()
 
                 time.sleep(uptime)
                 self.node.kill()
                 t.join()
-                print(f"[{self.uid}] Node stopped")
+                print(f"[{self.node.uid}] Node stopped")
 
                 # Random downtime between 5–10s
                 downtime = random.randint(5, 10)
-                print(f"[{self.uid}] Sleeping {downtime}s before restarting")
+                print(f"[{self.node.uid}] Sleeping {downtime}s before restarting")
                 time.sleep(downtime)
         except KeyboardInterrupt:
-            print(f"[{self.uid}] Simulation interrupted, shutting down...")
+            print(f"[{self.node.uid}] Simulation interrupted, shutting down...")
             self.node.kill()
 
 def main():
-    t = NodeThread(uid="sim-node-001", name="Simulated Node 1")
+    t = NodeThread()
     t.start()
 
     try:

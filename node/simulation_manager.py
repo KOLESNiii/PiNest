@@ -1,15 +1,12 @@
-import multiprocessing
 import time
-from simulated_node import NodeThread
+from .simulated_node import NodeThread
 
 def main():
     num_nodes = 3  # how many simulated nodes
     threads = []
 
     for i in range(num_nodes):
-        uid = f"sim-node-{i+1:03d}"
-        name = f"Sim Node {i+1}"
-        t = NodeThread(uid, name)
+        t = NodeThread()
         t.start()
         threads.append(t)
 
