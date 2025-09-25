@@ -41,6 +41,13 @@ class PiNode:
 
         self.status_topic = f"node/{self.uid}/status"
         self.log_topic = f"node/{self.uid}/log"
+        self.command_topic = f"node/{self.uid}/command"
+
+        self.actions = {
+            "rename": (self.rename, 1),
+            "shutdown": (self.shutdown, 0),
+            "restart": (self.restart, 0),
+        }
 
         self.heartbeat_thread = threading.Thread(target=self._heartbeat_monitor, daemon=True)
 
@@ -62,15 +69,17 @@ class PiNode:
 
     def on_connect(self, client, userdata, flags, rc) -> None:
         if rc == 0:
-            self.log(f"Connected to MQTT broker at {self.broker}", LogLevel.INFO)
+            self.log(f"Connected to MQTT broker at {self.broker}", LogLevel.DEBUG)
             self.client.subscribe("server/heartbeat")
             self.client.message_callback_add("server/heartbeat", self.on_server_heartbeat)
+            self.client.subscribe(self.command_topic)
+            self.client.message_callback_add(self.command_topic, self.on_command)
         else:
             self.log(f"Failed to connect to MQTT broker, return code {rc}", LogLevel.ERROR)
 
     def on_server_heartbeat(self, client, userdata, msg):
         """Called whenever server heartbeat is received."""
-        self.log("Received server heartbeat", LogLevel.INFO)
+        self.log("Received server heartbeat", LogLevel.DEBUG)
 
         payload = msg.payload.decode()
         data = json.loads(payload)
@@ -78,6 +87,29 @@ class PiNode:
         if not self.server_online:
             self.log("Server heartbeat restored, marking server as online", LogLevel.INFO)
             self.server_online = True
+
+    def on_command(self, client, userdata, msg):
+        """Handles commands sent to this node."""
+        try:
+            payload = json.loads(msg.payload.decode())
+            action = payload.get("action")
+            args = payload.get("args", [])
+            if action in self.actions:
+                cmd, reqargs = self.actions.get(action)
+
+                if len(args) != reqargs:
+                    self.log(f"Invalid number of arguments for {action}. Expected {reqargs}, got {len(args)}", LogLevel.ERROR)
+                    return
+                else:
+                    self.log(f"Executing command: {action} with args {args}", LogLevel.INFO)
+                    cmd(*args)
+            else:
+                self.log(f"Unknown command received: {action}", LogLevel.WARNING)
+                return
+            
+
+        except json.JSONDecodeError as e:
+            self.log(f"Failed to decode command payload: {e}", LogLevel.ERROR)
 
     def _heartbeat_monitor(self):
         """Thread that checks server heartbeat and updates server_online flag."""
@@ -103,6 +135,21 @@ class PiNode:
         mac = ':'.join(mac_num[i:i+2] for i in range(0, 11, 2))
         return mac
     
+    def rename(self, new_name: str) -> None:
+        old_name = getattr(self, "name", None)
+        self.name = new_name
+        self.log(f"Renamed node from {old_name} to {new_name}", LogLevel.INFO)
+
+    def shutdown(self) -> None:
+        self.log("Shutdown command received, shutting down node", LogLevel.WARNING)
+        self.kill()
+    
+    def restart(self) -> None:
+        self.log("Restart command received, restarting node", LogLevel.WARNING)
+        self.kill()
+        time.sleep(2)
+        self.run()
+    
     def register_with_backend(self) -> dict[str, str]:
         try:
             res = requests.post(f"{self.backend}/api/register", json={"uid": self.uid})
@@ -117,8 +164,8 @@ class PiNode:
             "uid": self.uid,
             "name": self.name,
             "ip": self.get_ip(),
-            "cpu": round(random.uniform(5, 30), 1),
-            "temp": round(random.uniform(40, 60), 1),
+            "cpu": round(random.uniform(5, 30), 1), # TODO: replace with real CPU usage
+            "temp": round(random.uniform(40, 60), 1), # TODO: replace with real temperature
             "status": "online",
             "last_seen": time.strftime("%Y-%m-%dT%H:%M:%S")
         }

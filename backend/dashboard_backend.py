@@ -161,3 +161,30 @@ async def register_node(request: Request) -> dict[str, str]:
         mqtt_client.publish("node/backend/log", log.to_json())
 
     return {"name": name}
+
+@app.post("/api/rename")
+async def rename_node(request: Request) -> dict[str, str]:
+    data = await request.json()
+    uid = data.get("uid")
+    new_name = data.get("name")
+
+    if not uid or not new_name:
+        return {"error": "Both 'uid' and 'name' are required"}
+
+    # Update the mac_table
+    old_name = mac_table.get(uid)
+    mac_table[uid] = new_name
+    with open(MAC_TABLE_PATH, "w") as f:
+        json.dump(mac_table, f, indent=2)
+
+    # Log and publish the rename command to the node
+    print(f"[Backend] Renaming node {uid} from {old_name} to {new_name}")
+    log = Log(origin="backend", message=f"Renaming node {uid} from {old_name} to {new_name}", level=LogLevel.INFO)
+    mqtt_client.publish("node/backend/log", log.to_json())
+
+    # Send MQTT command to node to rename itself
+    command_topic = f"node/{uid}/command"
+    command_payload = {"action": "rename", "args": [new_name]}
+    mqtt_client.publish(command_topic, json.dumps(command_payload))
+
+    return {"uid": uid, "old_name": old_name, "new_name": new_name}
