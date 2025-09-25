@@ -6,7 +6,7 @@
         <tr>
           <th>Timestamp</th>
           <th>Origin</th>
-          <th>Level</th>
+          <th>L</th>
           <th>Message</th>
         </tr>
       </thead>

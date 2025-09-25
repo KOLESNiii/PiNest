@@ -108,6 +108,15 @@ td.offline { color: red; }
   text-align: left;
 }
 
+/* Make timestamp and level columns shrink to fit content */
+.logs th:nth-child(1),
+.logs td:nth-child(1),   /* timestamp */
+.logs th:nth-child(3),
+.logs td:nth-child(3) {  /* level */
+  white-space: nowrap;    /* prevent wrapping */
+  width: 1%;              /* shrink to content */
+}
+
 .logs tr.D td { color: var(--log-debug); }
 .logs tr.I td { color: var(--log-info); }
 .logs tr.W td { color: var(--log-warning); }
@@ -122,4 +131,8 @@ td.offline { color: red; }
   border-radius: 5px;
   font-family: monospace;
   background-color: var(--table-bg);
+}
+
+.logs div {
+  padding: 10px;
 }
