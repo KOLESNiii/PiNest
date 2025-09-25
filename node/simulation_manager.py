@@ -5,7 +5,7 @@ def main():
     num_nodes = 3  # how many simulated nodes
     threads = []
 
-    for i in range(num_nodes):
+    for _ in range(num_nodes):
         t = NodeThread()
         t.start()
         threads.append(t)
