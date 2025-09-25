@@ -7,6 +7,7 @@ import paho.mqtt.client as mqtt
 import json
 from typing import Any
 from common import Log, LogLevel
+import os
 
 app = FastAPI()
 app.add_middleware(
@@ -16,6 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+MAC_TABLE_PATH = "mac_table.json"
 BROKER = "localhost"
 
 nodes = {}
@@ -44,7 +46,25 @@ mqtt_client.subscribe("node/+/status")
 mqtt_client.subscribe("node/+/log")
 mqtt_client.loop_start()
 
-mac_table = {}
+if os.path.exists(MAC_TABLE_PATH):
+    try:
+        with open(MAC_TABLE_PATH, "r") as f:
+            mac_table = json.load(f)
+            if not isinstance(mac_table, dict):
+                print(f"Warning: {MAC_TABLE_PATH} is not a dict. Resetting table.")
+                log = Log(origin="backend", message=f"{MAC_TABLE_PATH} is not a dict, resetting table", level=LogLevel.WARNING)
+                mqtt_client.publish("node/backend/log", log.to_json())
+                mac_table = {}
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"Warning: Failed to load {MAC_TABLE_PATH} ({e}). Starting with empty table.")
+        log = Log(origin="backend", message=f"Failed to load {MAC_TABLE_PATH} ({e}), starting with empty table", level=LogLevel.WARNING)
+        mqtt_client.publish("node/backend/log", log.to_json())
+        mac_table = {}
+else:
+    print(f"{MAC_TABLE_PATH} not found, starting with empty table.")
+    log = Log(origin="backend", message=f"{MAC_TABLE_PATH} not found, starting with empty table", level=LogLevel.INFO)
+    mqtt_client.publish("node/backend/log", log.to_json())
+    mac_table = {}
 
 def generate_name() -> str:
     return "Node-" + "".join(random.choices(string.ascii_uppercase, k=3))
@@ -71,10 +91,12 @@ async def register_node(request: Request) -> dict[str, str]:
         print(f"[Backend] Recognised {mac}, returning existing name {name}")
         log = Log(origin="backend", message=f"Found {mac} in table, returning {name}", level=LogLevel.INFO)
         mqtt_client.publish("node/backend/log", log.to_json())
-
     else:
         name = generate_name()
         mac_table[mac] = name
+
+        with open(MAC_TABLE_PATH, "w") as f:
+            json.dump(mac_table, f, indent=2)
         print(f"[Backend] New node registered: {mac} -> {name}")
         log = Log(origin="backend", message=f"Did not find {mac} in table, registered {mac} -> {name}", level=LogLevel.INFO)
         mqtt_client.publish("node/backend/log", log.to_json())
