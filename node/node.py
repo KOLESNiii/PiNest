@@ -1,24 +1,40 @@
 # node.py
+import threading
 import paho.mqtt.client as mqtt
 import json
 import time
 import socket
 import random
-from enum import Enum
 import uuid
 import requests
-from typing import Any
 from common import Log, LogLevel
+import logging
 
 TESTING = True # Set to False in production
 
 class PiNode:
-    def __init__(self, broker: str = "localhost", backend: str = "http://localhost:8000", heartbeat_interval: int = 2):
+    def __init__(self, 
+                 broker: str = "localhost", 
+                 backend: str = "http://localhost:8000", 
+                 heartbeat_interval: int = 2,
+                 server_offline_timeout: int = 6) -> None:
         self.uid = self.get_mac() if not TESTING else uuid.uuid4().hex[:8]
         self.broker = broker
         self.backend = backend
         self.heartbeat_interval = heartbeat_interval
+        self.server_offline_timeout = server_offline_timeout
         self.running = False
+        self.server_online = True
+        self.last_server_heartbeat = time.time()
+
+        self.logger = logging.getLogger(f"PiNode-{self.uid}")
+        self.logger.setLevel(logging.DEBUG)
+
+        ch = logging.StreamHandler()
+        ch.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s')
+        ch.setFormatter(formatter)
+        self.logger.addHandler(ch)
 
         self.client = mqtt.Client(client_id=self.uid, protocol=mqtt.MQTTv311)
         self.client.on_connect = self.on_connect
@@ -26,11 +42,51 @@ class PiNode:
         self.status_topic = f"node/{self.uid}/status"
         self.log_topic = f"node/{self.uid}/log"
 
+        self.heartbeat_thread = threading.Thread(target=self._heartbeat_monitor, daemon=True)
+
+    def log(self, message: str, level: LogLevel = LogLevel.INFO):
+        # Map LogLevel to logging module
+        level_map = {
+            LogLevel.DEBUG: logging.DEBUG,
+            LogLevel.INFO: logging.INFO,
+            LogLevel.WARNING: logging.WARNING,
+            LogLevel.ERROR: logging.ERROR,
+        }
+        
+        # Local logging
+        self.logger.log(level_map[level], message)
+
+        # Remote logging via MQTT
+        log_obj = Log(origin=self.name, message=message, level=level)
+        self.client.publish(self.log_topic, log_obj.to_json())
+
     def on_connect(self, client, userdata, flags, rc) -> None:
         if rc == 0:
-            print(f"[{self.uid}] Connected to MQTT broker at {self.broker}")
+            self.log(f"Connected to MQTT broker at {self.broker}", LogLevel.INFO)
+            self.client.subscribe("server/heartbeat")
+            self.client.message_callback_add("server/heartbeat", self.on_server_heartbeat)
         else:
-            print(f"[{self.uid}] Failed to connect, return code {rc}")
+            self.log(f"Failed to connect to MQTT broker, return code {rc}", LogLevel.ERROR)
+
+    def on_server_heartbeat(self, client, userdata, msg):
+        """Called whenever server heartbeat is received."""
+        self.log("Received server heartbeat", LogLevel.INFO)
+
+        payload = msg.payload.decode()
+        data = json.loads(payload)
+        self.last_server_heartbeat = data["timestamp"]
+        if not self.server_online:
+            self.log("Server heartbeat restored, marking server as online", LogLevel.INFO)
+            self.server_online = True
+
+    def _heartbeat_monitor(self):
+        """Thread that checks server heartbeat and updates server_online flag."""
+        while self.running:
+            if time.time() - self.last_server_heartbeat > self.server_offline_timeout:
+                if self.server_online:
+                    self.log("Server heartbeat lost, marking server as offline", LogLevel.WARNING)
+                    self.server_online = False
+            time.sleep(1)
 
     def get_ip(self) -> str:
         try:
@@ -53,7 +109,7 @@ class PiNode:
             res.raise_for_status()
             return res.json()
         except Exception as e:
-            print(f"[{self.uid}] Failed to register with backend: {e}")
+            self.log(f"Failed to register with backend: {e}", LogLevel.ERROR)
             return {"name": f"temp-{random.randint(1000,9999)}",}
 
     def publish_status(self) -> None:
@@ -69,11 +125,6 @@ class PiNode:
         self.client.publish(self.status_topic, json.dumps(status))
         print(f"[{self.uid}] Status published: {status}")
 
-    def publish_log(self, message: str, level: LogLevel = LogLevel.INFO) -> None:
-        log = Log(origin=self.name, message=message, level=level)
-        self.client.publish(self.log_topic, log.to_json())
-        print(f"[{self.uid}] Log published: {log.to_dict()}")
-
     def run(self) -> None:
         identity = self.register_with_backend()
         self.name = identity["name"]
@@ -82,22 +133,28 @@ class PiNode:
         self.client.loop_start()
         self.running = True
 
+        self.heartbeat_thread = threading.Thread(target=self._heartbeat_monitor, daemon=True)
+        self.heartbeat_thread.start()
+
         try:
             while self.running:
                 self.publish_status()
-                self.publish_log("Heartbeat check", LogLevel.INFO)
-                time.sleep(self.heartbeat_interval)
+                self.log("Heartbeat check", LogLevel.DEBUG)
+
+                interval = self.heartbeat_interval
+                if not self.server_online:
+                    interval *= 2  # reduce frequency
+                time.sleep(interval)
         except KeyboardInterrupt:
-            print(f"[{self.uid}] Shutting down simulated node...")
+            self.log("Simulation interrupted, shutting down...", LogLevel.WARNING)
             self.kill()
 
     def kill(self) -> None:
         if not self.running:
             return
         
-        print(f"[{self.uid}] Shutting down node...")
-        self.publish_log("Node recieved shutdown command", LogLevel.INFO)
-        self.publish_log("Node shutting down", LogLevel.WARNING)
+        self.log("Node received shutdown command", LogLevel.INFO)
+        self.log("Node shutting down", LogLevel.WARNING)
 
         offline_status = {
             "uid": self.uid,
@@ -111,9 +168,10 @@ class PiNode:
         self.client.publish(self.status_topic, json.dumps(offline_status))
 
         self.running = False
+        self.heartbeat_thread.join()
         self.client.loop_stop()
         self.client.disconnect()
-        print(f"[{self.uid}] Disconnected from MQTT broker.")
+        self.log("Disconnected from MQTT broker", LogLevel.INFO)
 
 def main() -> None:
     server_ip = "10.0.0.50"

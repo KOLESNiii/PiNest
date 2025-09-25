@@ -1,5 +1,8 @@
+from contextlib import asynccontextmanager
+from datetime import datetime
 import random
 import string
+from time import time, sleep
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
@@ -9,16 +12,12 @@ from typing import Any
 from common import Log, LogLevel
 import os
 
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 MAC_TABLE_PATH = "mac_table.json"
 BROKER = "localhost"
+SERVER_HEARTBEAT_INTERVAL = 2       # seconds
+NODE_OFFLINE_TIMEOUT = 5            # seconds
+NODE_REMOVAL_TIMEOUT = 300          # seconds
+LOGGING_LEVEL = LogLevel.INFO
 
 nodes = {}
 logs = []
@@ -28,12 +27,14 @@ def on_message(client, userdata, msg):
     payload = msg.payload.decode()
     if topic.endswith("/status"):
         data = json.loads(payload)
-        nodes[data['uid']] = data
+        uid = data["uid"]
+        data['last_seen_ts'] = datetime.strptime(data['last_seen'], "%Y-%m-%dT%H:%M:%S").timestamp()
+        nodes[uid] = data
     elif topic.endswith("/log"):
         try:
             log = json.loads(payload)
             logs.append(log)
-            if len(logs) > 1000:
+            while len(logs) > 1000:
                 logs.pop(0)
         except json.JSONDecodeError as e: 
             print("Error parsing log message:", e)
@@ -45,6 +46,32 @@ mqtt_client.connect(BROKER, 1883)
 mqtt_client.subscribe("node/+/status")
 mqtt_client.subscribe("node/+/log")
 mqtt_client.loop_start()
+sleep(0.1) # give some time to connect
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    heartbeat_task = asyncio.create_task(server_heartbeat_loop())
+    try:
+        yield
+    finally:
+        # Clean shutdown
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
+        print("Shutting down backend...")
+        mqtt_client.loop_stop()
+        mqtt_client.disconnect()
+    
+
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 if os.path.exists(MAC_TABLE_PATH):
     try:
@@ -69,14 +96,46 @@ else:
 def generate_name() -> str:
     return "Node-" + "".join(random.choices(string.ascii_uppercase, k=3))
 
+def mark_offline_nodes():
+    current_time = time()
+    to_update, to_remove = [], []
+    for uid, data in nodes.items():
+        if current_time - data.get('last_seen_ts', 0) > NODE_REMOVAL_TIMEOUT:
+            to_remove.append(uid)
+        elif current_time - data.get('last_seen_ts', 0) > NODE_OFFLINE_TIMEOUT:
+            to_update.append(uid)
+    for uid in to_update:
+        if nodes[uid]['status'] != 'offline':
+            print(f"[Backend] Marking node {uid} as offline")
+            log = Log(origin="backend", message=f"Marking node {uid} as offline", level=LogLevel.DEBUG)
+            mqtt_client.publish("node/backend/log", log.to_json())
+            nodes[uid]['status'] = 'offline'
+    for uid in to_remove:
+        print(f"[Backend] Removing node {uid} due to inactivity")
+        log = Log(origin="backend", message=f"Removing node {uid} due to inactivity", level=LogLevel.WARNING)
+        mqtt_client.publish("node/backend/log", log.to_json())
+        del nodes[uid]
+
+async def server_heartbeat_loop():
+    while True:
+        print("[Backend] Sending server heartbeat")
+        log = Log(origin="backend", message="Sending server heartbeat", level=LogLevel.DEBUG)
+        mqtt_client.publish("node/backend/log", log.to_json())
+        mqtt_client.publish("server/heartbeat", json.dumps({"timestamp": time()}))
+        mark_offline_nodes()
+        await asyncio.sleep(SERVER_HEARTBEAT_INTERVAL)
+
 @app.get("/api/nodes")
 async def get_nodes() -> list[dict[str, Any]]:
     return list(nodes.values())
 
 @app.get("/api/logs")
-async def get_logs() -> list[dict[str, str]]:
-    print("Fetching logs, total:", len(logs), "last one is:", logs[-1] if logs else "none")
-    return logs[-100:]  # last 100 log messages
+async def get_logs() -> list[dict[str, Any]]:
+    level_order = {"D": 0, "I": 1, "W": 2, "E": 3}
+    min_level_value = level_order[LOGGING_LEVEL.value]
+    
+    filtered_logs = [log for log in logs if level_order[log["level"]] >= min_level_value]
+    return filtered_logs[-100:]
 
 
 @app.post("/api/register")
