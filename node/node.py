@@ -24,11 +24,13 @@ class PiNode:
         self.heartbeat_interval = heartbeat_interval
         self.server_offline_timeout = server_offline_timeout
         self.running = False
-        self.server_online = True
-        self.last_server_heartbeat = time.time()
+        self.server_online = False
+        self.last_server_heartbeat = 0
+
+        self.name = "Unknown"
 
         self.logger = logging.getLogger(f"PiNode-{self.uid}")
-        self.logger.setLevel(logging.DEBUG)
+        self.logger.setLevel(logging.INFO)
 
         ch = logging.StreamHandler()
         ch.setLevel(logging.DEBUG)
@@ -38,6 +40,7 @@ class PiNode:
 
         self.client = mqtt.Client(client_id=self.uid, protocol=mqtt.MQTTv311)
         self.client.on_connect = self.on_connect
+        self.client.on_disconnect = self.on_disconnect
 
         self.status_topic = f"node/{self.uid}/status"
         self.log_topic = f"node/{self.uid}/log"
@@ -77,6 +80,18 @@ class PiNode:
         else:
             self.log(f"Failed to connect to MQTT broker, return code {rc}", LogLevel.ERROR)
 
+    def on_disconnect(self, client, userdata, rc):
+        """Called when MQTT disconnects."""
+        self.server_online = False
+        if rc != 0:
+            # Unexpected disconnect
+            self.log(f"Disconnected from MQTT broker (rc={rc}), will retry...", LogLevel.WARNING)
+            # Optionally, restart connection loop explicitly
+            threading.Thread(target=self._connect_mqtt, daemon=True).start()
+        else:
+            # Clean disconnect (kill() called)
+            self.log("MQTT broker connection closed cleanly", LogLevel.INFO)
+
     def on_server_heartbeat(self, client, userdata, msg):
         """Called whenever server heartbeat is received."""
         self.log("Received server heartbeat", LogLevel.DEBUG)
@@ -87,6 +102,7 @@ class PiNode:
         if not self.server_online:
             self.log("Server heartbeat restored, marking server as online", LogLevel.INFO)
             self.server_online = True
+            threading.Thread(target=self._register_with_backend, daemon=True).start()
 
     def on_command(self, client, userdata, msg):
         """Handles commands sent to this node."""
@@ -149,15 +165,37 @@ class PiNode:
         self.kill()
         time.sleep(2)
         self.run()
-    
-    def register_with_backend(self) -> dict[str, str]:
-        try:
-            res = requests.post(f"{self.backend}/api/register", json={"uid": self.uid})
-            res.raise_for_status()
-            return res.json()
-        except Exception as e:
-            self.log(f"Failed to register with backend: {e}", LogLevel.ERROR)
-            return {"name": f"temp-{random.randint(1000,9999)}",}
+
+    def _register_with_backend(self):
+        """Retries with exponential backoff until registration succeeds (max wait 8s)."""
+        wait_time = 1
+        max_wait = 8
+        while self.running:
+            try:
+                res = requests.post(f"{self.backend}/api/register", json={"uid": self.uid})
+                res.raise_for_status()
+                identity = res.json()
+                self.name = identity.get("name", self.name)
+                self.log(f"Successfully registered with backend as {self.name}", LogLevel.INFO)
+                return
+            except Exception as e:
+                self.log(f"Backend registration failed: {e}. Retrying in {wait_time}s...", LogLevel.ERROR)
+                time.sleep(wait_time)
+                wait_time = min(wait_time * 2, max_wait)
+
+    def _connect_mqtt(self):
+        wait_time = 1
+        max_wait = 8
+        while self.running:
+            try:
+                self.client.connect(self.broker, 1883, 60)
+                self.client.loop_start()
+                self.log("Connected to MQTT broker", LogLevel.INFO)
+                return
+            except Exception as e:
+                self.log(f"MQTT connection failed: {e}. Retrying in {wait_time}s...", LogLevel.ERROR)
+                time.sleep(wait_time)
+                wait_time = min(wait_time * 2, max_wait)
 
     def publish_status(self) -> None:
         status = {
@@ -173,49 +211,35 @@ class PiNode:
         print(f"[{self.uid}] Status published: {status}")
 
     def run(self) -> None:
-        identity = self.register_with_backend()
-        self.name = identity["name"]
-
-        self.client.connect(self.broker, 1883, 60)
-        self.client.loop_start()
         self.running = True
+        self._connect_mqtt()
 
         self.heartbeat_thread = threading.Thread(target=self._heartbeat_monitor, daemon=True)
         self.heartbeat_thread.start()
 
         try:
             while self.running:
-                self.publish_status()
-                self.log("Heartbeat check", LogLevel.DEBUG)
-
-                interval = self.heartbeat_interval
-                if not self.server_online:
-                    interval *= 2  # reduce frequency
-                time.sleep(interval)
+                if self.server_online:
+                    self.publish_status()
+                    self.log("Heartbeat check", LogLevel.DEBUG)
+                time.sleep(self.heartbeat_interval)
         except KeyboardInterrupt:
-            self.log("Simulation interrupted, shutting down...", LogLevel.WARNING)
+            self.log("Interrupted, shutting down...", LogLevel.WARNING)
             self.kill()
 
     def kill(self) -> None:
         if not self.running:
             return
         
-        self.log("Node received shutdown command", LogLevel.INFO)
         self.log("Node shutting down", LogLevel.WARNING)
 
-        offline_status = {
-            "uid": self.uid,
-            "name": self.name,
-            "ip": self.get_ip(),
-            "cpu": 0,
-            "temp": 0,
-            "status": "offline",
-            "last_seen": time.strftime("%Y-%m-%dT%H:%M:%S")
-        }
-        self.client.publish(self.status_topic, json.dumps(offline_status))
-
         self.running = False
-        self.heartbeat_thread.join()
+
+        if self.heartbeat_thread.is_alive():
+            self.heartbeat_thread.join()
+
+        self.server_online = False
+        self.last_server_heartbeat = 0
         self.client.loop_stop()
         self.client.disconnect()
         self.log("Disconnected from MQTT broker", LogLevel.INFO)
