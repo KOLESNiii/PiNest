@@ -17,24 +17,7 @@
 
       <!-- Logs Tab -->
       <div v-if="currentTab === 'logs'" class="logs">
-        <table>
-          <thead>
-            <tr>
-              <th>Timestamp</th>
-              <th>Origin</th>
-              <th>Level</th>
-              <th>Message</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(log, index) in logs" :key="index" :class="(log.level || 'I').toUpperCase()">
-              <td>{{ log.timestamp || '-' }}</td>
-              <td>{{ log.origin || 'Unknown' }}</td>
-              <td>{{ log.level || 'I' }}</td>
-              <td>{{ log.message || '-' }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <LogView :logs="logs" />
       </div>
     </div>
   </div>
@@ -43,10 +26,11 @@
 <script>
 import './assets/style.css';
 import NodeTable from './components/NodeTable.vue';
+import LogView from './components/LogView.vue';
 
 export default {
   name: "App",
-  components: { NodeTable },
+  components: { NodeTable, LogView },
   data() {
     return {
       currentTab: "nodes",
