@@ -12,28 +12,7 @@
     <div class="tab-content">
       <!-- Nodes Tab -->
       <div v-if="currentTab === 'nodes'">
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>IP</th>
-              <th>CPU %</th>
-              <th>Temp °C</th>
-              <th>Status</th>
-              <th>Last Seen</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="node in nodes" :key="node.uid">
-              <td>{{ node.name }}</td>
-              <td>{{ node.ip }}</td>
-              <td>{{ node.cpu }}</td>
-              <td>{{ node.temp }}</td>
-              <td :class="node.status">{{ node.status }}</td>
-              <td>{{ node.last_seen }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <NodeTable :nodes="nodes" @rename="handleRename" />
       </div>
 
       <!-- Logs Tab -->
@@ -63,9 +42,11 @@
 
 <script>
 import './assets/style.css';
+import NodeTable from './components/NodeTable.vue';
 
 export default {
   name: "App",
+  components: { NodeTable },
   data() {
     return {
       currentTab: "nodes",
@@ -78,8 +59,8 @@ export default {
     this.fetchLogs();
 
     // Refresh every 2 seconds
-    setInterval(this.fetchNodes, 2000);
-    setInterval(this.fetchLogs, 2000);
+    setInterval(this.fetchNodes, 500);
+    setInterval(this.fetchLogs, 500);
   },
   methods: {
     async fetchNodes() {
@@ -99,6 +80,21 @@ export default {
         console.error("Failed to fetch logs:", err);
       }
     },
+    async handleRename({ uid, oldName, newName }) {
+    try {
+      const res = await fetch("http://localhost:8000/api/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid, name: newName })
+      })
+      const data = await res.json()
+      if (data.error) {
+        alert("Error: " + data.error)
+      }
+    } catch (err) {
+      alert("Failed to rename node: " + err)
+    }
+  }
   },
 };
 </script>

@@ -31,37 +31,18 @@
 
 <script>
 export default {
-  data() {
-    return { nodes: [] }
-  },
-  mounted() {
-    this.fetchNodes()
-    setInterval(this.fetchNodes, 500)  // refresh every 2s
+  name: "NodeTable",
+  props: {
+    nodes: {
+      type: Array,
+      required: true
+    }
   },
   methods: {
-    async fetchNodes() {
-      const res = await fetch("http://localhost:8000/api/nodes")
-      this.nodes = await res.json()
-    },
     async editNodeName(node) {
       const newName = prompt("Enter new name for node:", node.name)
       if (newName && newName !== node.name) {
-        try {
-          const res = await fetch("http://localhost:8000/api/rename", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ uid: node.uid, name: newName })
-          })
-          const data = await res.json()
-          if (!data.error) {
-            node.name = data.new_name  // update locally
-            alert(`Node renamed: ${data.old_name} → ${data.new_name}`)
-          } else {
-            alert("Error: " + data.error)
-          }
-        } catch (err) {
-          alert("Failed to rename node: " + err)
-        }
+        this.$emit('rename', { uid: node.uid, oldName: node.name, newName })
       }
     }
   }
