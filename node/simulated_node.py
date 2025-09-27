@@ -1,7 +1,7 @@
 import threading
 import random
 import time
-from .node import PiNode
+from . import PiNode
 
 class NodeThread(threading.Thread):
     def __init__(self, broker="localhost", backend="http://localhost:8000", simulate_toggling=True):
