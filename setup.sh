@@ -21,6 +21,13 @@ source ./venv/bin/activate
 # --- Install Python dependencies ---
 echo "Installing Python packages..."
 pip install --upgrade pip
+pip install -r serverRequirements.txt
+
+deactivate
+
+source ./nodeVenv/bin/activate
+
+pip install --upgrade pip
 pip install -r requirements.txt
 
 # --- Setup frontend ---

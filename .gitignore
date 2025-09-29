@@ -1,4 +1,5 @@
 venv
+nodeVenv
 *.pyc
 mac_table.json
 numLines.sh
